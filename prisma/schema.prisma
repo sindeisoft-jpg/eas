@@ -1,0 +1,347 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  plan      String   @default("free") // free, pro, enterprise
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // JSON fields stored as text
+  settings Json // OrganizationSettings
+
+  users               User[]
+  databaseConnections DatabaseConnection[]
+  chatSessions        ChatSession[]
+  reports             SavedReport[]
+  llmConnections      LLMConnection[]
+  dataDictionaries    DataDictionary[]
+  sqlPolicies         SQLPolicy[]
+  dataPermissions     DataPermission[]
+  auditLogs           AuditLog[]
+  queryTemplates      QueryTemplate[]
+  systemSettings      SystemSettings[]
+  agents              Agent[]
+
+  @@map("organizations")
+}
+
+model User {
+  id             String    @id @default(uuid())
+  email          String    @unique
+  name           String
+  passwordHash   String    @map("password_hash")
+  avatar         String?
+  role           String    @default("viewer") // admin, analyst, viewer
+  organizationId String    @map("organization_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  lastLoginAt    DateTime? @map("last_login_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdDatabaseConnections DatabaseConnection[] @relation("DatabaseConnectionCreator")
+  createdChatSessions        ChatSession[]
+  createdReports             SavedReport[]
+  createdLLMConnections      LLMConnection[]
+  createdDataDictionaries    DataDictionary[]
+  createdSQLPolicies         SQLPolicy[]
+  createdDataPermissions     DataPermission[]
+  createdQueryTemplates      QueryTemplate[]
+  createdAgents              Agent[]
+  auditLogs                  AuditLog[]
+  updatedSystemSettings      SystemSettings[]     @relation("SystemSettingsUpdater")
+
+  @@map("users")
+}
+
+model DatabaseConnection {
+  id             String    @id @default(uuid())
+  name           String
+  type           String // mysql, postgresql, sqlite, sqlserver
+  host           String
+  port           Int       @default(3306)
+  database       String
+  username       String
+  password       String // Encrypted in production
+  ssl            Boolean   @default(false)
+  organizationId String    @map("organization_id")
+  createdBy      String    @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  lastTestedAt   DateTime? @map("last_tested_at")
+  status         String    @default("disconnected") // connected, disconnected, error
+  metadata       Json? // DatabaseSchema info
+  isDefault      Boolean   @default(false) @map("is_default")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  creator      User         @relation("DatabaseConnectionCreator", fields: [createdBy], references: [id])
+
+  chatSessions     ChatSession[]
+  reports          SavedReport[]
+  dataDictionaries DataDictionary[]
+  dataPermissions  DataPermission[]
+  queryTemplates   QueryTemplate[]
+  agents           Agent[]
+
+  @@map("database_connections")
+}
+
+model ChatSession {
+  id                   String   @id @default(uuid())
+  title                String
+  databaseConnectionId String   @map("database_connection_id")
+  llmConnectionId      String?  @map("llm_connection_id")
+  isPinned             Boolean  @default(false) @map("is_pinned")
+  organizationId       String   @map("organization_id")
+  createdBy            String   @map("created_by")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+  status               String   @default("idle") @map("status") // idle, processing, completed, error
+  currentTaskId        String?  @map("current_task_id") // 当前正在处理的任务ID
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  databaseConnection DatabaseConnection @relation(fields: [databaseConnectionId], references: [id], onDelete: Cascade)
+  llmConnection      LLMConnection?     @relation(fields: [llmConnectionId], references: [id], onDelete: SetNull)
+  creator            User               @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  messages ChatMessage[]
+
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  sessionId String   @map("session_id")
+  role      String // user, assistant, system
+  content   String   @db.Text
+  metadata  Json? // QueryResult, ChartConfig, etc.
+  timestamp DateTime @default(now())
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("chat_messages")
+}
+
+model SavedReport {
+  id                   String   @id @default(uuid())
+  title                String
+  description          String?  @db.Text
+  sql                  String   @db.Text
+  databaseConnectionId String   @map("database_connection_id")
+  chartConfig          Json?
+  organizationId       String   @map("organization_id")
+  createdBy            String   @map("created_by")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+  isPublic             Boolean  @default(false) @map("is_public")
+  tags                 Json     @default("[]") // string[]
+  schedule             Json? // ReportSchedule
+  linkageConfig        Json?    @map("linkage_config") // ReportLinkage[]
+  filters              Json?    @default("{}") // Record<string, any>
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  databaseConnection DatabaseConnection @relation(fields: [databaseConnectionId], references: [id], onDelete: Cascade)
+  creator            User               @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@map("saved_reports")
+}
+
+model LLMConnection {
+  id             String   @id @default(uuid())
+  name           String
+  provider       String // openai, anthropic, etc.
+  apiKey         String   @map("api_key") // Encrypted in production
+  baseUrl        String?  @map("base_url")
+  model          String
+  temperature    Float    @default(0.7)
+  maxTokens      Int      @default(2000) @map("max_tokens")
+  organizationId String   @map("organization_id")
+  createdBy      String   @map("created_by")
+  createdAt      DateTime @default(now()) @map("created_at")
+  status         String   @default("inactive") // active, inactive, error
+  isDefault      Boolean  @default(false) @map("is_default")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  creator      User         @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  chatSessions ChatSession[]
+  agents       Agent[]
+
+  @@map("llm_connections")
+}
+
+model DataDictionary {
+  id                   String   @id @default(uuid())
+  databaseConnectionId String   @map("database_connection_id")
+  tableName            String   @map("table_name")
+  tableDescription     String   @map("table_description") @db.Text
+  businessContext      String   @map("business_context") @db.Text
+  tableAlias           Json?    @map("table_alias") // string[]
+  columns              Json // ColumnDictionary[]
+  relationships        Json     @default("[]") // TableRelationship[]
+  sampleQueries        Json     @default("[]") @map("sample_queries") // string[]
+  organizationId       String   @map("organization_id")
+  createdBy            String   @map("created_by")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  databaseConnection DatabaseConnection @relation(fields: [databaseConnectionId], references: [id], onDelete: Cascade)
+  creator            User               @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@unique([databaseConnectionId, tableName])
+  @@map("data_dictionaries")
+}
+
+model SQLPolicy {
+  id                String   @id @default(uuid())
+  name              String
+  organizationId    String   @map("organization_id")
+  allowedOperations Json     @map("allowed_operations") // SQLOperation[]
+  blockedKeywords   Json     @default("[]") @map("blocked_keywords") // string[]
+  maxExecutionTime  Int      @default(30) @map("max_execution_time") // seconds
+  maxRowsReturned   Int      @default(10000) @map("max_rows_returned")
+  requiresApproval  Boolean  @default(false) @map("requires_approval")
+  createdBy         String   @map("created_by")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  creator      User         @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@map("sql_policies")
+}
+
+model DataPermission {
+  id                   String   @id @default(uuid())
+  name                 String
+  description          String?  @db.Text
+  role                 String // admin, analyst, viewer
+  databaseConnectionId String   @map("database_connection_id")
+  tablePermissions     Json     @map("table_permissions") // TablePermission[]
+  organizationId       String   @map("organization_id")
+  createdBy            String   @map("created_by")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  organization       Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  databaseConnection DatabaseConnection @relation(fields: [databaseConnectionId], references: [id], onDelete: Cascade)
+  creator            User               @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@map("data_permissions")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  timestamp      DateTime @default(now())
+  userId         String   @map("user_id")
+  userName       String   @map("user_name")
+  action         String // query, create, update, delete, login, export
+  resourceType   String?  @map("resource_type") // database, report, model, permission
+  resourceId     String?  @map("resource_id")
+  details        String   @db.Text
+  sql            String?  @db.Text
+  ipAddress      String?  @map("ip_address")
+  userAgent      String?  @map("user_agent")
+  status         String // success, failed, blocked
+  errorMessage   String?  @map("error_message") @db.Text
+  organizationId String   @map("organization_id")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, timestamp])
+  @@index([userId, timestamp])
+  @@map("audit_logs")
+}
+
+model SystemSettings {
+  id             String   @id @default(uuid())
+  organizationId String   @unique @map("organization_id")
+  queryCache     Json     @map("query_cache")
+  performance    Json
+  security       Json
+  alerts         Json
+  updatedBy      String   @map("updated_by")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  updater      User         @relation("SystemSettingsUpdater", fields: [updatedBy], references: [id])
+
+  @@map("system_settings")
+}
+
+model QueryTemplate {
+  id                   String   @id @default(uuid())
+  name                 String
+  description          String?  @db.Text
+  category             String
+  databaseConnectionId String?  @map("database_connection_id")
+  template             String   @db.Text
+  parameters           Json     @default("[]") // TemplateParameter[]
+  organizationId       String   @map("organization_id")
+  isPublic             Boolean  @default(false) @map("is_public")
+  usageCount           Int      @default(0) @map("usage_count")
+  createdBy            String   @map("created_by")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  databaseConnection DatabaseConnection? @relation(fields: [databaseConnectionId], references: [id], onDelete: SetNull)
+  creator            User                @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@map("query_templates")
+}
+
+model Agent {
+  id                   String   @id @default(uuid())
+  name                 String
+  description          String?  @db.Text
+  systemMessage        String   @map("system_message") @db.Text
+  llmConnectionId      String   @map("llm_connection_id")
+  databaseConnectionId String?  @map("database_connection_id")
+  tools                Json     @default("[]") // AgentTool[]
+  memory               Json     @default("{}") // AgentMemory
+  workflow             Json     @default("{}") // AgentWorkflow
+  execution            Json     @default("{}") // AgentExecution
+  organizationId       String   @map("organization_id")
+  createdBy            String   @map("created_by")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+  status               String   @default("inactive") // active, inactive, error
+  isDefault            Boolean  @default(false) @map("is_default")
+
+  organization       Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  llmConnection      LLMConnection       @relation(fields: [llmConnectionId], references: [id], onDelete: Cascade)
+  databaseConnection DatabaseConnection? @relation(fields: [databaseConnectionId], references: [id], onDelete: SetNull)
+  creator            User                @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@map("agents")
+}
+
+model PromptConfig {
+  id          String   @id @default(uuid())
+  category    String   // sql_generation, report_generation, feature_list, attribution_analysis, column_translation, conversation, report_agent
+  name        String   // 配置项名称，如 "sql_generation_system_prompt"
+  description String?  @db.Text // 配置项描述
+  content     String   @db.Text // 提示词内容
+  variables   Json     @default("[]") // 支持的变量列表，如 ["{{databaseSchema}}", "{{userQuestion}}"]
+  isActive    Boolean  @default(true) @map("is_active")
+  version     Int      @default(1) // 版本号，用于追踪变更
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  updatedBy   String?  @map("updated_by") // 最后更新人
+
+  @@unique([category, name])
+  @@map("prompt_configs")
+}
